@@ -26,10 +26,14 @@ class nbdClient(object):
 
         self._nbdHandle = nbd.NBD()
 
-    def connect(self):
+    def connect(self, transport, socket):
         self._nbdHandle.add_meta_context(self._metaContext)
         self._nbdHandle.set_export_name(self._exportName)
-        self._nbdHandle.connect_tcp(self._host,self._port)
+        if transport != 'tcp':
+            self._nbdHandle.connect_unix(socket)
+        else:
+            self._nbdHandle.connect_tcp(self._host,self._port)
+
 
         return self._nbdHandle
 

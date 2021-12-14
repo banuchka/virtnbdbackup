@@ -53,6 +53,16 @@ def main():
     parser.add_argument("-v", "--verbose", default=False,
         help="Enable debug output",
         action="store_true")
+    parser.add_argument("--transport", default="tcp",
+        choices=['tcp','unix'],
+        type=str,
+        help="Transport, defaults to TCP")
+    parser.add_argument("--tempdir", type=str,
+        help="Temp dir for checkpoints and VM XML")
+    parser.add_argument("--getdata", default=False,
+        help="Just continue backup",action="store_true")
+    parser.add_argument("--getconf", default=False,
+        help="Get VM config",action="store_true")
 
     lib = common.Common()
     args = lib.argparse(parser)
@@ -107,7 +117,11 @@ def main():
     checkpointName = "virtnbdbackup"
     parentCheckpoint = False
     checkpoints = []
-    cptFile = '%s/%s.cpt' % (args.output, args.domain)
+    if args.tempdir:
+        cptFile = '%s/%s.cpt' % (args.tempdir, args.domain)
+    else:
+        cptFile = '%s/%s.cpt' % (args.output, args.domain)
+
     if os.path.exists(cptFile):
         with open(cptFile,'r') as cptFh:
              checkpoints = json.loads(cptFh.read())
@@ -116,15 +130,20 @@ def main():
         logging.info('Looking for checkpoints')
         if args.level == "full" and len(checkpoints) > 0:
             logging.info("Removing all existant checkpoints before full backup")
-            virtClient.removeAllCheckpoints(domObj, checkpoints)
-            os.remove(cptFile)
+            if not args.getdata:
+                virtClient.removeAllCheckpoints(domObj, checkpoints)
+                os.remove(cptFile)
             checkpoints = []
         elif args.level == "full" and len(checkpoints) < 1:
-            virtClient.removeAllCheckpoints(domObj,None)
+            if not args.getdata:
+                virtClient.removeAllCheckpoints(domObj,None)
             checkpoints = []
 
         if len(checkpoints) > 0 and args.level == "inc":
-            nextCpt = len(checkpoints)+1
+            if not args.getdata:
+                nextCpt = len(checkpoints)+1
+            else:
+                nextCpt = len(checkpoints)
             checkpointName = "virtnbdbackup.%s" % nextCpt
             if args.checkpoint != False:
                 logging.info("Overriding checkpoint: %s" % args.checkpoint)
@@ -140,23 +159,28 @@ def main():
 
         logging.info("Using checkpoint name %s" % checkpointName)
 
-    try:
-        virtClient.startBackup(domObj, disks, args.level,
-                               checkpointName, parentCheckpoint)
-    except Exception as e:
-        logging.error('%s' % e)
-        sys.exit(1)
+    if not args.getdata:
+        try:
+            virtClient.startBackup(domObj, disks, args.level,
+                                   checkpointName, parentCheckpoint, args.transport)
+        except Exception as e:
+            logging.error('%s' % e)
+            sys.exit(1)
 
     if args.level != "copy":
         logging.info('Started backup with checkpoint, saving information')
         if len(checkpoints) < 1:
             checkpoints = []
-        checkpoints.append(checkpointName)
-        with open(cptFile,'w') as cFw:
-            cFw.write(json.dumps(checkpoints))
+
+        if not args.getdata:
+            checkpoints.append(checkpointName)
+            with open(cptFile,'w') as cFw:
+                cFw.write(json.dumps(checkpoints))
 
     if args.startonly == True:
         logging.info("Exiting after backup Start")
+        if args.getconf:
+            backupConfig(vmConfig, args.tempdir, checkpointName, logger)
         sys.exit(0)
 
     for disk in disks:
@@ -165,29 +189,41 @@ def main():
             continue
         try:
             backupDisk(disk.diskTarget, args, lib, logger,
-                       checkpointName, parentCheckpoint)
+                       checkpointName, parentCheckpoint, domObj)
         except Exception as e:
             logger.error('%s' % e)
             virtClient.stopBackup(domObj, disk.diskTarget)
             sys.exit(1)
-    if args.printonly is False and args.output != "-":
-        backupConfig(vmConfig, args, checkpointName, logger)
-    virtClient.stopBackup(domObj, disk.diskTarget)
+    if args.printonly is False and args.output != "-" and not args.getdata:
+        backupConfig(vmConfig, args.output, checkpointName, logger)
 
-def backupConfig(vmConfig, args, checkpointName, logger):
-    configFile = '%s/vmconfig.%s.xml' % (args.output, checkpointName)
+    if args.printonly is False and args.output == "-" and args.tempdir != '' and not args.getdata:
+        backupConfig(vmConfig, args.tempdir, checkpointName, logger)
+
+
+    if not args.getdata:
+        virtClient.stopBackup(domObj, disk.diskTarget)
+
+def backupConfig(vmConfig, outputdir, checkpointName, logger):
+    configFile = '%s/vmconfig.%s.xml' % (outputdir, checkpointName)
     logger.info("Saving VM config to: %s" % configFile)
+    if not os.path.exists(outputdir):
+        try:
+            os.mkdir(outputdir)
+        except Exception as e:
+            logger.error("%s" % e)
+            sys.exit(1)
     with open(configFile, 'w') as configFh:
         configFh.write(vmConfig)
 
-def backupDisk(diskTarget, args, lib, logger, checkpointName, parentCheckpoint):
+def backupDisk(diskTarget, args, lib, logger, checkpointName, parentCheckpoint, domObj):
     metaContext = None
     if args.level == "inc":
         metaContext = "qemu:dirty-bitmap:backup-%s" % diskTarget
         logger.info("INC backup: set context to %s" % metaContext)
 
     nbdClient = nbdhelper.nbdClient(diskTarget, metaContext)
-    connection = nbdClient.connect()
+    connection = nbdClient.connect(args.transport, '/tmp/backup_%s.socket' % domObj.name())
 
     if args.qemu and args.level != "inc":
         logger.info("Using qemu tools to query extents")
