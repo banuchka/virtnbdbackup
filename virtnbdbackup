@@ -357,7 +357,8 @@ def main():
         outHelper.Directory(args.output)
     else:
         zipStream = outHelper.Zip()
-        args.output = "./"
+        args.output = args.scratchdir
+        #args.output = "./"
         args.worker = 1
         args.raw = False
 
