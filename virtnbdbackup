@@ -231,7 +231,8 @@ def getFileStream(
         fileStream = repository.Directory(args.output)
     else:
         fileStream = repository.Zip()
-        args.output = "./"
+        #args.output = "./"
+        args.output = args.scratchdir
         args.worker = 1
 
     return fileStream
