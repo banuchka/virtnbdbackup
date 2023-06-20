@@ -133,7 +133,7 @@ def readCheckpointFile(cFile: str) -> List[str]:
 
     try:
         with output.openfile(cFile, "rb") as fh:
-            checkpoints = json.loads(fh.read().decode())
+            checkpoints = json.loads(json.loads(fh.read().decode()))
         return checkpoints
     except OutputException as e:
         raise exceptions.ReadCheckpointsError(f"Failed to read checkpoint file: [{e}]")
